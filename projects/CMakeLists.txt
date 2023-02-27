@@ -24,7 +24,7 @@ list(APPEND LLVM_INCLUDE_DIRS "${COAST_BASE_DIR}/llvm-project/llvm/include")
 add_definitions(${LLVM_DEFINITIONS})
 include_directories(${LLVM_INCLUDE_DIRS})
 
-#add_subdirectory (debugStatements)
+add_subdirectory (debugStatements)
 #add_subdirectory (exitMarker)
 #add_subdirectory (CFCSS)
 #add_subdirectory (dataflowProtection)

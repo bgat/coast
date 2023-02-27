@@ -1,5 +1,3 @@
-cmake_minimum_required(VERSION 3.5)
-
-add_llvm_loadable_module(DebugStatements
-	debugStatements.cpp
-	)
+add_library(DebugStatements SHARED debugStatements.cpp)
+target_link_libraries(DebugStatements
+  "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")

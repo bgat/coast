@@ -7,15 +7,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "debugStatements"
-
-#include <llvm/IR/Module.h>
-#include <llvm/IR/Instructions.h>
-#include "llvm/Support/raw_ostream.h"
-#include <llvm/IR/Constants.h>
+#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
+#include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/Debug.h>
 
 using namespace llvm;
+
+#define DEBUG_TYPE "debugStatements"
 
 // list of functions to add print statements to
 // if nothing, do all
@@ -48,8 +48,7 @@ bool DebugStatements::runOnModule(Module &M) {
 			get(M.getContext(), 8), 0);
 	Type* type_i32 = Type::getInt32Ty(M.getContext());
 	FunctionType *printfTy = FunctionType::get(type_i32, std::vector<Type*> (1, charPointerType), true);
-	Constant* c = M.getOrInsertFunction("printf",printfTy);
-	Function* print = dyn_cast<Function>(c);
+	FunctionCallee print = M.getOrInsertFunction("printf", printfTy);
 	assert(print && "Print function not defined");
 
 	//Define constant strings
@@ -144,7 +143,7 @@ GetElementPtrInst* DebugStatements::getGEPforPrint(StringRef* varName, BasicBloc
 	globalVal->setInitializer(dataInit);
 	globalVal->setLinkage(GlobalVariable::PrivateLinkage);
 	globalVal->setUnnamedAddr( GlobalValue::UnnamedAddr() );
-	globalVal->setAlignment(1);
+	globalVal->setAlignment(MaybeAlign(1));
 
 
 	//Create constants for GEP arguments
