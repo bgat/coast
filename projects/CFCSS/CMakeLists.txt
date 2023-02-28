@@ -1,5 +1,3 @@
-cmake_minimum_required(VERSION 3.5)
-
-add_llvm_loadable_module(CFCSS
-	CFCSS.cpp
-	)
+add_library(CFCSS SHARED CFCSS.cpp)
+target_link_libraries(CFCSS
+  "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")

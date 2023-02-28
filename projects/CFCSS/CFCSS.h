@@ -10,7 +10,9 @@
 #ifndef PROJECTS_CFCSS_CFCSS_H_
 #define PROJECTS_CFCSS_CFCSS_H_
 
-#define DEBUG_TYPE "CFCSS"
+#include <list>
+#include <vector>
+#include <map>
 
 #include "llvm/Pass.h"
 #include "llvm/IR/Function.h"
@@ -19,11 +21,10 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/BasicBlock.h"
-#include <llvm/PassAnalysisSupport.h>
-#include <list>
-#include <vector>
 
 using namespace llvm;
+
+#define DEBUG_TYPE "CFCSS"
 
 STATISTIC(BBCount, "The number of Basic Blocks in the program");
 STATISTIC(passTime, "How long it took to run this pass");

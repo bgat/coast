@@ -87,11 +87,12 @@ std::string CFCSS::BBNode::printNode(){
 void CFCSS::insertErrorFunction(Module &M, StringRef name) {
 	Type* t_void = Type::getVoidTy(M.getContext());
 
-	Constant* c = M.getOrInsertFunction(name, t_void, NULL);
+	// TODO: Why does this result in a "narrowing conversion of 'Args#0' warning?
+	Constant* c = dyn_cast<Constant>(M.getOrInsertFunction(name, t_void, NULL).getCallee());
 	Function* errorFn = dyn_cast<Function>(c);
 	assert(errorFn && "Error detection function is non-void");
 
-	Constant* abortC = M.getOrInsertFunction("abort", t_void, NULL);
+	Constant* abortC = dyn_cast<Constant>(M.getOrInsertFunction("abort", t_void, NULL).getCallee());
 	Function* abortF = dyn_cast<Function>(abortC);
 	assert(abortF && "Abort function detected");
 
@@ -105,8 +106,8 @@ void CFCSS::insertErrorFunction(Module &M, StringRef name) {
 void CFCSS::createErrorBlocks(Function &F) {
 	//Create an error handler block for each function - they can't share one
 	Module* M = F.getParent();
-	Constant* c = M->getOrInsertFunction("FAULT_DETECTED_CFC",
-			Type::getVoidTy(M->getContext()), NULL);
+	Constant* c = dyn_cast<Constant>(M->getOrInsertFunction("FAULT_DETECTED_CFC",
+			Type::getVoidTy(M->getContext()), NULL).getCallee());
 	Function* cfFn = dyn_cast<Function>(c);
 
 	BasicBlock* lastBlock = &(F.back());
@@ -220,7 +221,7 @@ void CFCSS::sortGraph(){
 	generateSignatures();
 	auto sigIt = signatures.begin();
 	for(BBNode* bn : graph){
-		TerminatorInst* TI = bn->node->getTerminator();
+		Instruction* TI = bn->node->getTerminator();
 		//need to add the outbound edges to determine dependencies & hierarchy
 		for(unsigned I = 0, NSucc = TI->getNumSuccessors(); I < NSucc; ++I){
 			BasicBlock *Succ = TI->getSuccessor(I);
@@ -311,7 +312,7 @@ void CFCSS::updatePhiNodes(BBNode* pred, BBNode* buff, BBNode* succ){
 
 void CFCSS::updateBranchInst(BBNode* pred, BBNode* buff, BBNode* succ){
 	//this function changes the terminator of pred to point to buff instead of succ
-	TerminatorInst* TI = pred->node->getTerminator();
+	Instruction* TI = pred->node->getTerminator();
 	BasicBlock* Succ;
 	unsigned I = 0;
 	//first find the part of the instruction that points to succ
@@ -483,7 +484,7 @@ GlobalVariable* CFCSS::setUpGlobal(Module &M, StringRef vName, IntegerType* IT1)
 	RTS->setInitializer(CI);
 	RTS->setLinkage(GlobalVariable::CommonLinkage);
 	RTS->setUnnamedAddr( GlobalValue::UnnamedAddr() );
-	RTS->setAlignment(4);
+	RTS->setAlignment(MaybeAlign(4));
 	return RTS;
 }
 
@@ -492,12 +493,11 @@ void CFCSS::insertStoreInsts(BBNode* bn, IntegerType* IT1, GlobalVariable* RTS,
 	//this first thing is to update the current signature value
 	assert(insertSpot && "insert spot is a null pointer!");
 	ConstantInt* currentSig = ConstantInt::get(IT1, bn->sig, false);
-	StoreInst* SI = new StoreInst(currentSig, RTS);
-	SI->insertBefore(insertSpot);
+	StoreInst* SI = new StoreInst(currentSig, RTS, insertSpot);
 
 	//update the signature adjuster
 	ConstantInt* sigAdjVal = ConstantInt::get(IT1, bn->sigAdj, false);
-	StoreInst* SI2 = new StoreInst(sigAdjVal, RTSA);
+	StoreInst* SI2 = new StoreInst(sigAdjVal, RTSA, false, (Instruction*)nullptr);
 	SI2->insertAfter(SI);
 }
 
@@ -506,7 +506,7 @@ void CFCSS::insertCompInsts(BBNode* bn, IntegerType* IT1, GlobalVariable* RTS,
 	ConstantInt* nextSig = ConstantInt::get(IT1, bn->sig, false);
 	ConstantInt* nextSigDiff = ConstantInt::get(IT1, bn->sigDiff, false);
 
-	LoadInst* RTSval = new LoadInst(RTS, Twine("LoadRTS_"));
+	LoadInst* RTSval = new LoadInst(RTS->getType(), RTS, Twine("LoadRTS_"), false, (Instruction*)nullptr);
 	BinaryOperator* XOR = BinaryOperator::Create(Instruction::BinaryOps::Xor,
 			RTSval, nextSigDiff, Twine("XOR1_"));
 
@@ -515,7 +515,7 @@ void CFCSS::insertCompInsts(BBNode* bn, IntegerType* IT1, GlobalVariable* RTS,
 	LoadInst* RTSAval;
 	BinaryOperator* XOR2;
 	if(bn->isBranchFanIn || fromCallInst){
-		RTSAval = new LoadInst(RTSA, Twine("LoadRTSAdj_"));
+		RTSAval = new LoadInst(RTSA->getType(), RTSA, Twine("LoadRTSAdj_"), false, (Instruction*)nullptr);
 		XOR2 = BinaryOperator::Create(Instruction::BinaryOps::Xor,
 				dyn_cast<Value>(XOR), RTSAval, Twine("XOR2_"));
 		CI = CmpInst::Create(Instruction::OtherOps::ICmp,
