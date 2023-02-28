@@ -1,6 +1,3 @@
-cmake_minimum_required(VERSION 3.5)
-
-
-add_llvm_loadable_module(ExitMarker
-	exitMarker.cpp
-)
+add_library(ExitMarker SHARED exitMarker.cpp)
+target_link_libraries(ExitMarker
+  "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")

@@ -7,18 +7,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "ExitMarker"
-
 #include <vector>
 #include <set>
-#include <llvm/IR/Module.h>
-#include <llvm/IR/Instructions.h>
-#include <llvm/IR/Function.h>
+#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
 #include "llvm/Support/raw_ostream.h"
 #include <llvm/IR/Constants.h>
 #include <llvm/Support/Debug.h>
 
 using namespace llvm;
+
+#define DEBUG_TYPE "ExitMarker"
 
 //--------------------------------------------------------------------------//
 // Top level behavior
@@ -119,7 +119,7 @@ bool ExitMarker::runOnModule(Module &M) {
 	FunctionType* markerTy = FunctionType::get(mainFn->getReturnType(),args,false);
 
 	//Create a function called EDDI_EXIT
-	Constant* c = M.getOrInsertFunction("EXIT_MARKER", markerTy);
+	Constant* c = dyn_cast<Constant>(M.getOrInsertFunction("EXIT_MARKER", markerTy).getCallee());
 	Function* exitMarkerFn = dyn_cast<Function>(c);
 	assert(exitMarkerFn && "Exit marker function is non-void");
 
