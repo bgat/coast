@@ -1,5 +1,3 @@
-cmake_minimum_required(VERSION 3.5)
-
-add_llvm_loadable_module(SmallProfile
-	smallProfile.cpp
-	)
+add_library(SmallProfile SHARED smallProfile.cpp)
+target_link_libraries(SmallProfile
+  "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")

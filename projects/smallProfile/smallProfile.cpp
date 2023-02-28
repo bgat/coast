@@ -7,18 +7,19 @@
  * August 2019
  */
 
-#define DEBUG_TYPE "debugStatements"
-
 #include <string>
 #include <set>
-#include <llvm/IR/Module.h>
-#include <llvm/IR/Instructions.h>
+
+#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
 #include "llvm/Support/raw_ostream.h"
 #include <llvm/IR/Constants.h>
 #include <llvm/Support/Debug.h>
-#include <llvm/Support/CommandLine.h>
 
 using namespace llvm;
+
+#define DEBUG_TYPE "debugStatements"
 
 //--------------------------------------------------------------------------//
 // Command line options for the pass
@@ -90,7 +91,7 @@ Function* SmallProfile::getPrintFunction(Module &M) {
 	}
 
 	// make the function
-	Constant* printfc = M.getOrInsertFunction(printFnName, printfTy);
+	Constant* printfc = dyn_cast<Constant>(M.getOrInsertFunction(printFnName, printfTy).getCallee());
 	Function* print = dyn_cast<Function>(printfc);
 	assert(print && "Print function not defined");
 
@@ -107,7 +108,7 @@ void SmallProfile::profileLocalFunctions(Module &M) {
 	for (auto &F : M) {
 		StringRef fnName = F.getName();
 		// skip the debug information function calls
-		if (fnName.startswith_lower("llvm.dbg") || fnName.startswith_lower("llvm.lifetime."))
+		if (fnName.startswith_insensitive("llvm.dbg") || fnName.startswith_insensitive("llvm.lifetime."))
 			continue;
 
 		// external function calls
@@ -236,7 +237,7 @@ void SmallProfile::insertProfilePrintFunction(Module &M) {
 
 		// Arguments for printing the profile count
 		cntArgs.push_back(decGEP);
-		LoadInst* LI = new LoadInst(p.second, "glblLoad");
+		LoadInst* LI = new LoadInst(p.second->getType(), p.second, "glblLoad", false, (Instruction*)nullptr);
 		cntArgs.push_back(LI);
 		ArrayRef<Value*>* cntCallArgs = new ArrayRef<Value*>(cntArgs);
 
@@ -258,7 +259,7 @@ void SmallProfile::insertProfilePrintFunction(Module &M) {
 Function* SmallProfile::createProfilePrintFunction(Module &M) {
 
 	FunctionType* statsCallType = FunctionType::get(Type::getVoidTy(M.getContext()), false);
-	Constant* c = M.getOrInsertFunction("PRINT_PROFILE_STATS", statsCallType);
+	Constant* c = dyn_cast<Constant>(M.getOrInsertFunction("PRINT_PROFILE_STATS", statsCallType).getCallee());
 	Function* printStatsFn = dyn_cast<Function>(c);
 	assert(printStatsFn && "Profiling function is non-void");
 
@@ -292,7 +293,7 @@ GlobalVariable* SmallProfile::createGlobalCounter(Module &M, Function* fn) {
 		nextCnt->setConstant(false);
 		nextCnt->setInitializer(ConstantInt::getNullValue(type_i32));
 		nextCnt->setUnnamedAddr( GlobalValue::UnnamedAddr() );
-		nextCnt->setAlignment(4);
+		nextCnt->setAlignment(MaybeAlign(4));
 
 		// add to list for later
 		std::pair<Function*, GlobalVariable*> tmpPair = std::make_pair(fn, nextCnt);
@@ -308,11 +309,10 @@ GlobalVariable* SmallProfile::createGlobalCounter(Module &M, Function* fn) {
  */
 void SmallProfile::incrementCounter(GlobalVariable* cntr, Instruction* insertHere, bool extCall) {
 
-	LoadInst* LI = new LoadInst(cntr, "cntLoad");
+	LoadInst* LI = new LoadInst(cntr->getType(), cntr, "cntLoad", false, insertHere);
 	Constant* one = ConstantInt::get(LI->getType(), 1, false);
 	BinaryOperator* BI = BinaryOperator::CreateAdd(LI, one, "incCnt");
-	StoreInst* SI = new StoreInst(BI, cntr);
-	LI->insertBefore(insertHere);
+	StoreInst* SI = new StoreInst(BI, cntr, (Instruction*)nullptr);
 	BI->insertAfter(LI);
 	SI->insertAfter(BI);
 
@@ -346,7 +346,7 @@ GetElementPtrInst* SmallProfile::getGEPforPrint(Module &M, StringRef* varName, B
 	globalVal->setInitializer(dataInit);
 	globalVal->setLinkage(GlobalVariable::PrivateLinkage);
 	globalVal->setUnnamedAddr( GlobalValue::UnnamedAddr() );
-	globalVal->setAlignment(1);
+	globalVal->setAlignment(MaybeAlign(1));
 
 
 	//Create constants for GEP arguments
