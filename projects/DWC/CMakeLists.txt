@@ -1,6 +1,3 @@
-cmake_minimum_required(VERSION 3.5)
-
-
-add_llvm_loadable_module(DWC
-	DWC.cpp
-)
+add_library(DWC SHARED DWC.cpp)
+target_link_libraries(DWC
+  "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")
