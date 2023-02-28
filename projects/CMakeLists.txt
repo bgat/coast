@@ -25,7 +25,7 @@ add_definitions(${LLVM_DEFINITIONS})
 include_directories(${LLVM_INCLUDE_DIRS})
 
 add_subdirectory (debugStatements)
-#add_subdirectory (exitMarker)
+add_subdirectory (exitMarker)
 #add_subdirectory (CFCSS)
 add_subdirectory (dataflowProtection)
 add_subdirectory (DWC)
