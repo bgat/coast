@@ -114,7 +114,7 @@ void dataflowProtection::populateSyncPoints(Module& M) {
 				dynamicSyncCount->setConstant(false);
 				dynamicSyncCount->setInitializer(ConstantInt::getNullValue(IntegerType::getInt64Ty(M.getContext())));
 				dynamicSyncCount->setUnnamedAddr( GlobalValue::UnnamedAddr() );
-				dynamicSyncCount->setAlignment(8);
+				dynamicSyncCount->setAlignment(MaybeAlign(8));
 			}
 			globalsToSkip.insert(dynamicSyncCount);
 		}
@@ -170,8 +170,8 @@ void dataflowProtection::populateSyncPoints(Module& M) {
 
 					// skip debug function calls
 					if (calledF->hasName()) {
-						if (calledF->getName().startswith_lower("llvm.dbg.") ||
-								calledF->getName().startswith_lower("llvm.lifetime."))
+						if (calledF->getName().startswith_insensitive("llvm.dbg.") ||
+								calledF->getName().startswith_insensitive("llvm.lifetime."))
 						{
 							continue;
 						}
@@ -286,7 +286,7 @@ void dataflowProtection::processSyncPoints(Module & M, int numClones) {
 			TMRErrorDetected->setConstant(false);
 			TMRErrorDetected->setInitializer(ConstantInt::getNullValue(IntegerType::getInt32Ty(M.getContext())));
 			TMRErrorDetected->setUnnamedAddr( GlobalValue::UnnamedAddr() );
-			TMRErrorDetected->setAlignment(4);
+			TMRErrorDetected->setAlignment(MaybeAlign(4));
 		}
 	}
 	assert(TMRErrorDetected != nullptr);
@@ -327,7 +327,7 @@ void dataflowProtection::processSyncPoints(Module & M, int numClones) {
 		} else if (CallInst* currCallInst = dyn_cast<CallInst>(I)) {
 			processCallSync(currCallInst, TMRErrorDetected);
 
-		} else if (TerminatorInst* currTerminator = dyn_cast<TerminatorInst>(I)) { // is a terminator
+		} else if (Instruction* currTerminator = dyn_cast<Instruction>(I)) { // is a terminator
 			syncTerminator(currTerminator, TMRErrorDetected);
 
 		} else if (GetElementPtrInst* currGEP = dyn_cast<GetElementPtrInst>(I)) {
@@ -578,13 +578,13 @@ void dataflowProtection::processCallSync(CallInst* currCallInst, GlobalVariable*
 	}
 
 	std::deque<Value*> cloneableOperandsList;
-	for (unsigned int it = 0; it < currCallInst->getNumArgOperands(); it++) {
-		if (isa<Constant>(currCallInst->getArgOperand(it))
-				|| isa<GetElementPtrInst>(currCallInst->getArgOperand(it)))
+	for (auto &it : currCallInst->args()) {
+		if (isa<Constant>(it)
+			|| isa<GetElementPtrInst>(it))
 			continue;
-		if (isa<PointerType>(currCallInst->getArgOperand(it)->getType()))
+		if (isa<PointerType>(it->getType()))
 			continue;
-		cloneableOperandsList.push_back(currCallInst->getArgOperand(it));
+		cloneableOperandsList.push_back(it);
 	}
 	if (cloneableOperandsList.size() == 0) {
 		startOfSyncLogic[currCallInst] = currCallInst;
@@ -738,7 +738,7 @@ void dataflowProtection::processCallSync(CallInst* currCallInst, GlobalVariable*
 }
 
 
-void dataflowProtection::syncTerminator(TerminatorInst* currTerminator, GlobalVariable* TMRErrorDetected) {
+void dataflowProtection::syncTerminator(Instruction* currTerminator, GlobalVariable* TMRErrorDetected) {
 	assert(currTerminator);
 
 	// Only sync if there are arguments to duplicate
@@ -1139,8 +1139,9 @@ Instruction* dataflowProtection::splitBlocks(Instruction* I, BasicBlock* errBloc
 		// it is possible that the value being compared is a vector type instead of a basic type
 
 		// need to sign extend the boolean vector
-		int numElements = newCmpInst->getType()->getVectorNumElements();
-		Type* newVecType = VectorType::get(IntegerType::getInt16Ty(originalBlock->getContext()), numElements);
+		// TODO: is getStructNumElements() the right API here?
+		int numElements = newCmpInst->getType()->getNumContainedTypes();
+		Type* newVecType = VectorType::get(IntegerType::getInt16Ty(originalBlock->getContext()), numElements, false);
 
 		SExtInst* signExt = new SExtInst(dyn_cast<Value>(newCmpInst), newVecType);
 		signExt->setName("syncExt");
@@ -1207,7 +1208,9 @@ void dataflowProtection::insertErrorFunction(Module &M, int numClones) {
 	// Will be created if either 1) DWC or 2) Stack Protection
 	Constant* c;
 	if ( (numClones == 2) || (protectStackFlag) ) {
-		c = M.getOrInsertFunction(fault_function_name, t_void, NULL);
+		// TODO: Why does this induce the following warning?
+		//   warning: narrowing conversion of ‘Args#0’ from ‘long int’ to ‘size_t’ {aka ‘long unsigned int’} [-Wnarrowing]
+		c = dyn_cast<Constant>(M.getOrInsertFunction(fault_function_name, t_void, NULL).getCallee());
 	} else {
 		return;
 	}
@@ -1250,11 +1253,12 @@ void dataflowProtection::insertErrorFunction(Module &M, int numClones) {
 	// Then, name the new one. Have to change global name because is used elsewhere
 	std::string random_suffix = getRandomString(12);
 	fault_function_name += random_suffix;
-	c = M.getOrInsertFunction(fault_function_name, t_void, NULL);
+	FunctionCallee fc = M.getOrInsertFunction(fault_function_name, t_void, NULL);
+	c = dyn_cast<Function>(fc.getCallee());
 	errFn = dyn_cast<Function>(c);
 
 	// reference to "abort" call
-	Constant* abortC = M.getOrInsertFunction("abort", t_void, NULL);
+	Constant* abortC = dyn_cast<Constant>(M.getOrInsertFunction("abort", t_void, NULL).getCallee());
 	Function* abortF = dyn_cast<Function>(abortC);
 	assert(abortF && "Abort function detected");
 	// TODO: on what platform would an "abort" function not exist?
@@ -1274,7 +1278,7 @@ void dataflowProtection::createErrorBlocks(Module &M, int numClones) {
 	// Will be created if either 1) DWC or 2) Stack Protection
 	Constant* c;
 	if ( (numClones == 2) || (protectStackFlag) ) {
-		c = M.getOrInsertFunction(fault_function_name, t_void, NULL);
+		c = dyn_cast<Constant>(M.getOrInsertFunction(fault_function_name, t_void, NULL).getCallee());
 	} else {
 		return;
 	}
@@ -1342,7 +1346,7 @@ void dataflowProtection::insertTMRDetectionFlag(Instruction* cmpInst, GlobalVari
 	BinaryOperator* andCmps = BinaryOperator::CreateAnd(cmpInst, cmpInst2, "cmpReduction", nextInst);
 
 	// Insert a load, or after the sel inst
-	LoadInst* LI = new LoadInst(TMRErrorDetected, "errFlagLoad", nextInst);
+	LoadInst* LI = new LoadInst(TMRErrorDetected->getType(), TMRErrorDetected, "errFlagLoad", nextInst);
 	CastInst* castedCmp = CastInst::CreateZExtOrBitCast(andCmps, LI->getType(), "extendedCmp", LI);
 
 	BinaryOperator* BI = BinaryOperator::CreateAdd(LI, castedCmp, "errFlagCmp", nextInst);
@@ -1417,7 +1421,7 @@ void dataflowProtection::insertTMRCorrectionCount(Instruction* cmpInst, GlobalVa
 		 * Increment global sync counter
 		 */
 		// Populate new block -- load global counter, increment, store
-		LoadInst* loadSyncCounter = new LoadInst(dynamicSyncCount, "ldSyncCnt", cmpInst);
+		LoadInst* loadSyncCounter = new LoadInst(dynamicSyncCount->getType(), dynamicSyncCount, "ldSyncCnt", cmpInst);
 		Constant* one = ConstantInt::get(loadSyncCounter->getType(), 1, false);
 		BinaryOperator* incSyncCounter = BinaryOperator::CreateAdd(
 										loadSyncCounter, one, "incSyncCnt", cmpInst);
@@ -1425,7 +1429,7 @@ void dataflowProtection::insertTMRCorrectionCount(Instruction* cmpInst, GlobalVa
 	}
 
 	// Populate new block -- load global counter, increment, store
-	LoadInst* LI = new LoadInst(TMRErrorDetected, "errFlagLoad", errBlock);
+	LoadInst* LI = new LoadInst(TMRErrorDetected->getType(), TMRErrorDetected, "errFlagLoad", errBlock);
 	Constant* one = ConstantInt::get(LI->getType(), 1, false);
 	BinaryOperator* BI = BinaryOperator::CreateAdd(LI, one, "errFlagAdd", errBlock);
 	StoreInst* SI = new StoreInst(BI, TMRErrorDetected, errBlock);
@@ -1507,7 +1511,7 @@ void dataflowProtection::insertVectorTMRCorrectionCount(Instruction* cmpInst, In
 
 	VectorType* typ = dyn_cast<VectorType>(newCmpInst->getType());
 	// have to extract each element
-	uint64_t nTypes = typ->getNumElements();
+	ElementCount nTypes = typ->getElementCount();
 	VectorType* newVType = VectorType::get(TMRErrorDetected->getValueType(), nTypes);
 
 	// zero-extend the cmpOr result to be the same size as the TMR error counter
@@ -1521,7 +1525,7 @@ void dataflowProtection::insertVectorTMRCorrectionCount(Instruction* cmpInst, In
 
 	// add this to the global
 	// if there were no errors, then it's just adding 0
-	LoadInst* LI = new LoadInst(TMRErrorDetected, "errFlagLoad", thisBlock);
+	LoadInst* LI = new LoadInst(TMRErrorDetected->getValueType(), TMRErrorDetected, "errFlagLoad", thisBlock);
 	BinaryOperator* BI = BinaryOperator::CreateAdd(LI, redAdd, "errFlagAdd", thisBlock);
 	StoreInst* SI = new StoreInst(BI, TMRErrorDetected, thisBlock);
 	LI->moveAfter(redAdd);		BI->moveAfter(LI);		SI->moveAfter(BI);
@@ -1625,8 +1629,8 @@ void dataflowProtection::insertStackProtection(Module& M) {
 
 	#ifdef PROTECT_RETURN_ADDRESS
 	// make a reference to the functions that get the values
-	Constant* constRetAddrFunc = M.getOrInsertFunction(
-			"llvm.returnaddress", voidPtrFuncRetType);
+	Constant* constRetAddrFunc = dyn_cast<Constant>(M.getOrInsertFunction(
+					"llvm.returnaddress", voidPtrFuncRetType).getCallee());
 	Function* getRetAddrFunc = dyn_cast<Function>(constRetAddrFunc);
 	assert(getRetAddrFunc && "return address function defined");
 	#endif
@@ -1715,7 +1719,8 @@ void dataflowProtection::insertStackProtection(Module& M) {
 			LoadInst* loadRet = new LoadInst(
 				glblType, 			/* type */
 				retAddrLcl,			/* value */
-				"loadRetAddr"		/* name */
+				"loadRetAddr",		/* name */
+				ret
 			);
 			// for some reason, have to do this separate from the constructor
 			loadRet->insertBefore(ret);
@@ -1735,7 +1740,7 @@ void dataflowProtection::insertStackProtection(Module& M) {
 			if (supportsAddrRetAddr && TMR) {
 				// Load the 2nd copy of the global
 				LoadInst* loadRet2 = new LoadInst(glblType,
-						retAddrLcl_TMR, "loadRetAddr_TMR");
+								retAddrLcl_TMR, "loadRetAddr_TMR", ret);
 				loadRet2->insertBefore(ret);
 				// majority wins
 				SelectInst* sel = SelectInst::Create(cmp0, castRetValAgain,
@@ -1759,7 +1764,7 @@ void dataflowProtection::insertStackProtection(Module& M) {
 						sel, castAddrRetAddr, ret);
 				// fix sync point stuff
 				// since the current instruction isn't guarunteed to be a terminator
-				TerminatorInst* curTerminator = ret->getParent()->getTerminator();
+				Instruction* curTerminator = ret->getParent()->getTerminator();
 				Instruction* callRetAgain = castRetValAgain->getPrevNode();
 				startOfSyncLogic[curTerminator] = callRetAgain;
 				syncPoints.push_back(curTerminator);
@@ -1772,7 +1777,7 @@ void dataflowProtection::insertStackProtection(Module& M) {
 			// We have to mark the terminator of the new block so that
 			//  instructions don't get moved to the wrong spot
 			BasicBlock* newBlock0 = newCmp0->getParent();
-			TerminatorInst* newTerm0 = newBlock0->getTerminator();
+			Instruction* newTerm0 = newBlock0->getTerminator();
 			Instruction* callRetAgain = castRetValAgain->getPrevNode();
 			startOfSyncLogic[newTerm0] = callRetAgain;
 			syncPoints.push_back(newTerm0);

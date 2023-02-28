@@ -179,7 +179,7 @@ private:
   bool syncGEP(GetElementPtrInst* currGEP, GlobalVariable* TMRErrorDetected);
   void syncStoreInst(StoreInst* currStoreInst, GlobalVariable* TMRErrorDetected, bool forceFlag = false);
   void processCallSync(CallInst* currCallInst, GlobalVariable* TMRErrorDetected);
-  void syncTerminator(TerminatorInst* currTerminator, GlobalVariable* TMRErrorDetected);
+  void syncTerminator(Instruction* currTerminator, GlobalVariable* TMRErrorDetected);
   Instruction* splitBlocks(Instruction* I, BasicBlock* errBlock);
   // DWC error handling
   void insertErrorFunction(Module& M, int numClones);

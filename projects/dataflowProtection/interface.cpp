@@ -387,10 +387,10 @@ void dataflowProtection::processAnnotations(Module& M) {
 						fnsToClone.insert(fn);
 					} else if (anno == xMR_call_anno) {
 						if (verboseFlag) errs() << "Directive: replicate calls to function '" << fn->getName() << "'\n";
-						coarseGrainedUserFunctions.push_back(fn->getName());
+						coarseGrainedUserFunctions.push_back(fn->getName().str());
 					} else if (anno == skip_call_anno) {
 						if (verboseFlag) errs() << "Directive: do not clone calls to function '"  << fn->getName() << "'\n";
-						skipLibCalls.push_back(fn->getName());
+						skipLibCalls.push_back(fn->getName().str());
 						// TODO: do we need to worry about duplicates? - make it a set instead
 					} else if (anno.startswith("no-verify-")) {
 						StringRef global_name = anno.substr(10, anno.size() - 10);
@@ -446,8 +446,8 @@ void dataflowProtection::processAnnotations(Module& M) {
 							// clone all the args
 							cloneAfterFnCall.insert(fn);
 							// also, don't touch the insides, or make more than one call
-							skipFn.push_back(fn->getName());
-							skipLibCalls.push_back(fn->getName());
+							skipFn.push_back(fn->getName().str());
+							skipLibCalls.push_back(fn->getName().str());
 						} else {
 							// it's a list of indices to clone
 							StringRef argList = anno.substr(cloneAfterCallAnno.size(), anno.size() - cloneAfterCallAnno.size());

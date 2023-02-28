@@ -330,7 +330,7 @@ bool dataflowProtection::comesFromSingleCall(Instruction* storeUse) {
 		if (CallInst* ci = dyn_cast<CallInst>(nextVal)) {
 			Function* calledF = ci->getCalledFunction();
 			// need to handle intrinsic functions here
-			if (calledF->getIntrinsicID() != Intrinsic::ID::not_intrinsic) {
+			if (calledF->getIntrinsicID() != Intrinsic::not_intrinsic) {
 				if (willBeCloned(ci)) {
 					returnVal = false;
 				} else {
@@ -719,59 +719,62 @@ void dataflowProtection::walkUnPtStores(StoreRecordType &record) {
 void dataflowProtection::verifyOptions(Module& M) {
 	fnsToClone_ptr = &fnsToClone;
 
-    // catalog all the loads across the replication boundary
-    std::list< LoadRecordType > unPtLoadRecords;
-    std::list< LoadRecordType > ptLoadRecords;
-    std::list< StoreRecordType > unPtStoreRecords;
+	// catalog all the loads across the replication boundary
+	std::list< LoadRecordType > unPtLoadRecords;
+	std::list< LoadRecordType > ptLoadRecords;
+	std::list< StoreRecordType > unPtStoreRecords;
 
-    // look through the protected global variables
-    for (auto g : globalsToClone) {
+	// look through the protected global variables
+	for (auto g : globalsToClone) {
 		// get all the users
 		for (auto u : g->users()) {
 			// is it an instruction?
 			if (Instruction* UI = dyn_cast<Instruction>(u)) {
 				Function* parentF = UI->getParent()->getParent();
 
-                // is the instruction in a protected function?
+				// is the instruction in a protected function?
 				if (fnsToClone.find(parentF) == fnsToClone.end()) {
 
-                    /* Any stores in here are not allowed (non-protected function to protected global) */
+					/* Any stores in here are not allowed (non-protected function to protected global) */
 					if (StoreInst* si = dyn_cast<StoreInst>(UI)) {
 						// add it to the list of infractions
 						writeToGlobalMap(unPtWritesToPtGlbls, g, parentF, si);
 					}
                     
-                    /* note any load instructions to track later */
-                    else if (LoadInst* li = dyn_cast<LoadInst>(UI)) {
-                        LoadRecordType newRecord = std::make_tuple(li, g, parentF);
-                        unPtLoadRecords.push_back(newRecord);
-                    }
-                }
+					/* note any load instructions to track later */
+					else if (LoadInst* li = dyn_cast<LoadInst>(UI)) {
+						LoadRecordType newRecord = std::make_tuple(li, g, parentF);
+						unPtLoadRecords.push_back(newRecord);
+					}
+				}
 
-            }
+			}
 			/* end instruction use */
             
-            /* GEPs are often inline */
+			/* GEPs are often inline */
 			else if (ConstantExpr* CE = dyn_cast<ConstantExpr>(u)) {
-                if (CE->isGEPWithNoNotionalOverIndexing()) {
-                    for (auto cu : CE->users()) {
+				assert(false && "TODO: isGEPWithNoNotionalOverIndexing");
+#if 0
+				if (CE->isGEPWithNoNotionalOverIndexing()) {
+					for (auto cu : CE->users()) {
 						if (LoadInst* li = dyn_cast<LoadInst>(cu)) {
-                            Function* parentF = li->getParent()->getParent();
+							Function* parentF = li->getParent()->getParent();
 
-                            // is the instruction in a protected function?
-                            if (fnsToClone.find(parentF) == fnsToClone.end()) {
-                            	LoadRecordType newRecord = std::make_tuple(li, g, parentF);
-                            	unPtLoadRecords.push_back(newRecord);
-                            }
-                        }
-                    }
-                }
-            }
+							// is the instruction in a protected function?
+							if (fnsToClone.find(parentF) == fnsToClone.end()) {
+								LoadRecordType newRecord = std::make_tuple(li, g, parentF);
+								unPtLoadRecords.push_back(newRecord);
+							}
+						}
+					}
+				}
+#endif
+			}
 			/* end GEP use */
-        }
-    }
+		}
+	}
 
-    // Make sure that all unprotected globals are not used in protected functions
+	// Make sure that all unprotected globals are not used in protected functions
 	auto moduleEnd = M.global_end();
 	for (auto g = M.global_begin(); g != moduleEnd; g++) {
 		GlobalVariable* gv = &(*g);
@@ -784,9 +787,9 @@ void dataflowProtection::verifyOptions(Module& M) {
 			continue;
 		}
 
-        /* Now it's either in globalsToSkip, or not marked at all.
-         * Either way, shouldn't be used in a protected function. */
-        else {
+		/* Now it's either in globalsToSkip, or not marked at all.
+		 * Either way, shouldn't be used in a protected function. */
+		else {
 			for (auto u : gv->users()) {
 				// is it an instruction?
 				if (Instruction* UI = dyn_cast<Instruction>(u)) {
@@ -797,42 +800,44 @@ void dataflowProtection::verifyOptions(Module& M) {
 						// verifyDebug = true;
 					}
 
-                    // is the instruction in a protected function?
+					// is the instruction in a protected function?
 					if (fnsToClone.find(parentF) != fnsToClone.end()) {
-                        /* Stores to unprotected globals from protected functions are not allowed */
+						/* Stores to unprotected globals from protected functions are not allowed */
 						if (fnsToSkip.find(parentF) != fnsToSkip.end()) {
 							continue;
 						}
 						if (StoreInst* si = dyn_cast<StoreInst>(UI)) {
-                            StoreRecordType newRecord = std::make_tuple(si, gv, parentF);
-                            unPtStoreRecords.push_back(newRecord);
-//                            if (verifyDebug) errs() << *si << '\n';
-                        }
+							StoreRecordType newRecord = std::make_tuple(si, gv, parentF);
+							unPtStoreRecords.push_back(newRecord);
+							// if (verifyDebug) errs() << *si << '\n';
+						}
 
-                        /* We want to walk the load uses here too to find any later stores */
+						/* We want to walk the load uses here too to find any later stores */
 						else if (LoadInst* li = dyn_cast<LoadInst>(UI)) {
-                            LoadRecordType newRecord = std::make_tuple(li, gv, parentF);
-                            ptLoadRecords.push_back(newRecord);
-                        }
-                    }
-                }
+							LoadRecordType newRecord = std::make_tuple(li, gv, parentF);
+							ptLoadRecords.push_back(newRecord);
+						}
+					}
+				}
 				/* end instruction use */
 
-                /* GEPs are often inline */
+				/* GEPs are often inline */
 				else if (ConstantExpr* CE = dyn_cast<ConstantExpr>(u)) {
+					assert(false && "TODO: isGEPWithNoNotionalOverIndexing()");
+#if 0
 					if (CE->isGEPWithNoNotionalOverIndexing()) {
 
-                        for (auto cu : CE->users()) {
+						for (auto cu : CE->users()) {
 							/* GEPs used by stores are what we're looking for */
 							if (StoreInst* si = dyn_cast<StoreInst>(cu)) {
-                                Function* parentF = si->getParent()->getParent();
+								Function* parentF = si->getParent()->getParent();
 
-                                // is the instruction in a protected function?
-                                if (fnsToClone.find(parentF) != fnsToClone.end()) {
-                                	StoreRecordType newRecord = std::make_tuple(si, gv, parentF);
-                                	unPtStoreRecords.push_back(newRecord);
-                                }
-                            }
+								// is the instruction in a protected function?
+								if (fnsToClone.find(parentF) != fnsToClone.end()) {
+									StoreRecordType newRecord = std::make_tuple(si, gv, parentF);
+									unPtStoreRecords.push_back(newRecord);
+								}
+							}
 							else if (ConstantExpr* CE2 = dyn_cast<ConstantExpr>(cu)) {
 								/* more casts hiding inside of things
 								 * possible ugly things we have to deal with:
@@ -854,8 +859,8 @@ void dataflowProtection::verifyOptions(Module& M) {
 									}
 								}
 							}
-                        }
-                    }
+						}
+					}
 					/* end GEP use */
 					else if (CE->isCast()) {
 						/* casts hiding inside things -
@@ -878,16 +883,17 @@ void dataflowProtection::verifyOptions(Module& M) {
 						}
 					}
 					/* end other ConstantExpr use */
-                }
+#endif
+				}
 
 				else {
 					PRINT_STRING("-- unidentified global user:");
 					PRINT_VALUE(u);
 				}
 				verifyDebug = false;
-            }
-        }
-    }
+			}
+		}
+	}
 
 	/* Repeat these as long as the sizes keep increasing */
 	while (true) {
@@ -905,8 +911,8 @@ void dataflowProtection::verifyOptions(Module& M) {
 
 		/* Now we have to walk all of the calls */
 		// protected functions using unprotected globals
-//		if (ptCallsList.size() > 0)
-//			errs() << "\nprotected functions using unprotected globals in calls:\n";
+		// if (ptCallsList.size() > 0)
+		//	errs() << "\nprotected functions using unprotected globals in calls:\n";
 		for (auto record : ptCallsList) {
 			CallInst* ci = std::get<0>(record);
 			GlobalVariable* gv = std::get<1>(record);
@@ -953,8 +959,8 @@ void dataflowProtection::verifyOptions(Module& M) {
 		}
 		ptCallsList.clear();
 
-//		if (unPtCallsList.size() > 0)
-//			errs() << "\nunprotected functions using protected globals in calls:\n";
+		// if (unPtCallsList.size() > 0)
+		//	errs() << "\nunprotected functions using protected globals in calls:\n";
 		// unprotected functions using protected globals
 		for (auto record : unPtCallsList) {
 			CallInst* ci = std::get<0>(record);
@@ -971,7 +977,7 @@ void dataflowProtection::verifyOptions(Module& M) {
 				writeToGlobalMap(unPtCallsWithPtGlbls, gv, parentF, ci);
 				continue;
 			}
-//			errs() << "CallInst: " << *ci << "\n";
+			// errs() << "CallInst: " << *ci << "\n";
 
 			/* Being used by protected or unprotected function is fine, as long as it's read-only.
 			 * Track each argument use as if it was a load instruction of the global. */
@@ -989,18 +995,18 @@ void dataflowProtection::verifyOptions(Module& M) {
 				writeToGlobalMap(unPtCallsWithPtGlbls, gv, parentF, ci);
 				continue;
 			}
-//			errs() << "Inside function '" << parentF->getName() << "'\n";
+			// errs() << "Inside function '" << parentF->getName() << "'\n";
 
 			auto argIter = calledFunction->arg_begin() + argIdx;
 			// TODO: might want to use ->getArg() instead, but that function
 			//  isn't available until LLVM version 10
 
-// 			errs() << "operand number " << argIdx << " of function '" << calledFunction->getName() << "': ";
-//			errs() << *argIter; // << "\n Of type: " << *argIter->getType();
-//			errs() << "\nUses:\n";
-//			for (auto use : argIter->users()) {
-//				errs() << *use << "\n";
-//			}
+			// errs() << "operand number " << argIdx << " of function '" << calledFunction->getName() << "': ";
+			// errs() << *argIter; // << "\n Of type: " << *argIter->getType();
+			// errs() << "\nUses:\n";
+			// for (auto use : argIter->users()) {
+			//	errs() << *use << "\n";
+			// }
 
 			if (argIdx >= calledFunction->arg_size()) {
 				errs() << err_string
@@ -1019,7 +1025,7 @@ void dataflowProtection::verifyOptions(Module& M) {
 				ptLoadRecords.push_back(newRecord);
 			}
 		}
-//		errs() << "\n";
+		// errs() << "\n";
 		unPtCallsList.clear();
 
 		/* Leaving conditions */
@@ -1029,11 +1035,11 @@ void dataflowProtection::verifyOptions(Module& M) {
 	}
 
 	/* This is only done once, so outside the loop */
-    for (auto record : unPtStoreRecords) {
-    	walkUnPtStores(record);
-    }
+	for (auto record : unPtStoreRecords) {
+		walkUnPtStores(record);
+	}
 
-    /* Print scope crossing warning messages */
+	/* Print scope crossing warning messages */
 	// referencing protected globals from unprotected functions
 	printGlobalScopeErrorMessage(unPtWritesToPtGlbls, true, "written in");
 	printGlobalScopeErrorMessage(unPtReadsFromPtGlbls, true, "read in");
@@ -1052,12 +1058,11 @@ void dataflowProtection::verifyOptions(Module& M) {
 	}
 
 	// kill the compilation if we saw any of these errors
-	if ( 	(unPtWritesToPtGlbls.size()  > 0)  ||
-			(unPtReadsFromPtGlbls.size() > 0)  ||
-			(ptWritesToUnPtGlbls.size()  > 0)  ||
-			(ptCallsWithUnPtGlbls.size() > 0)  ||
-			(unPtCallsWithPtGlbls.size() > 0)  )
-	{
+	if ((unPtWritesToPtGlbls.size()  > 0)  ||
+	    (unPtReadsFromPtGlbls.size() > 0)  ||
+	    (ptWritesToUnPtGlbls.size()  > 0)  ||
+	    (ptCallsWithUnPtGlbls.size() > 0)  ||
+	    (unPtCallsWithPtGlbls.size() > 0)  ) {
 		errs() << "\nExiting...\n";
 		// good place for debug
 		dumpModule(M);

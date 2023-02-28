@@ -411,7 +411,7 @@ void dataflowProtection::moveClonesToEndIfSegmented(Module & M) {
 //						errs() << "    Move point at CI " << I << "\n";
 						movePoints.push(&I);
 					}
-				} else if (TerminatorInst* TI = dyn_cast<TerminatorInst>(&I)) {
+				} else if (Instruction* TI = dyn_cast<Instruction>(&I)) {
 					if (isSyncPoint(TI)) {
 //						errs() << "    Move point at TI sync " << *startOfSyncLogic[&I] << "\n";
 						movePoints.push(startOfSyncLogic[&I]);
@@ -574,7 +574,7 @@ GlobalVariable* dataflowProtection::createGlobalVariable(Module& M,
 	newGV->setConstant(false);
 	newGV->setInitializer(ConstantInt::getNullValue(newGVtype));
 	newGV->setUnnamedAddr(GlobalValue::UnnamedAddr());
-	newGV->setAlignment(byteSz);
+	newGV->setAlignment(MaybeAlign(byteSz));
 
 	return newGV;
 }
@@ -653,7 +653,7 @@ void dataflowProtection::walkInstructionUses(Instruction* I, bool xMR) {
 			} else if (CI) {
 				// skip all call instructions for now
 				;
-			} else if (TerminatorInst* TI = dyn_cast<TerminatorInst>(instUse)) {
+			} else if (Instruction* TI = dyn_cast<Instruction>(instUse)) {
 				// this should become a syncpoint
 				//  really? needs more testing
 //				if (xMR) syncPoints.push_back(instUse);
@@ -730,7 +730,7 @@ void dataflowProtection::updateFnWrappers(Module& M) {
 
 			// find the matching function name
 			StringRef normalFnName = fnName.substr(0, fnName.size() - wrapperFnEnding.size());
-			Constant* fnC = M.getOrInsertFunction(normalFnName, fn.getFunctionType());
+			Constant* fnC = dyn_cast<Constant>(M.getOrInsertFunction(normalFnName, fn.getFunctionType()).getCallee());
 			if (!fnC) {
 				errs() << "Matching function call to '" << normalFnName << "' doesn't exist!\n";
 				exit(-1);
@@ -758,7 +758,7 @@ void dataflowProtection::updateFnWrappers(Module& M) {
 			std::vector<int> argNums = splitOnDelim(argNumStr, '_');
 			tempCloneAfterCallArgMap[&fn] = argNums;
 
-			Constant* fnC = M.getOrInsertFunction(normalFnName, fn.getFunctionType());
+			Constant* fnC = dyn_cast<Constant>(M.getOrInsertFunction(normalFnName, fn.getFunctionType()).getCallee());
 			if (!fnC) {
 				errs() << "Matching function call to '" << normalFnName << "' doesn't exist!\n";
 				exit(-1);
@@ -783,7 +783,8 @@ void dataflowProtection::updateFnWrappers(Module& M) {
 					auto op0 = ci->getOperand(0);
 					Function* calledF;
 
-					Value* v = ci->getCalledValue();
+					// TODO: Is getCalledOperand() the right API here?
+					Value* v = ci->getCalledOperand();
 					calledF = dyn_cast<Function>(v->stripPointerCasts());
 					auto found = wrapperMap.find(calledF);
 
