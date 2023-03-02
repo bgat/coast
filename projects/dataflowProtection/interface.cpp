@@ -362,142 +362,174 @@ void dataflowProtection::processCommandLine(Module& M, int numClones) {
 }
 
 void dataflowProtection::processAnnotations(Module& M) {
-	// Inspired by http://bholt.org/posts/llvm-quick-tricks.html
-	auto global_annos = M.getNamedGlobal("llvm.global.annotations");
-	if (global_annos) {
-		auto a = cast<ConstantArray>(global_annos->getOperand(0));
-		// check that it is the right type
-		if (a) {
-			for (int i=0; i < a->getNumOperands(); i++) {
-				auto e = cast<ConstantStruct>(a->getOperand(i));
+	auto ga = M.getNamedGlobal("llvm.global.annotations");
+	if (!ga) return;
+	auto a = dyn_cast<ConstantArray>(ga->getOperand(0));
+	if (!a) return;
 
-				// extract data
-				auto anno = cast<ConstantDataArray>(cast<GlobalVariable>(e->getOperand(1)->getOperand(0))->getOperand(0))->getAsCString();
+	// Examine each annotation. Ignore the ones we don't recognize.
+	for (auto &ai : a->operands()) {
+		auto cai = dyn_cast<ConstantStruct>(ai);
+		if (!cai) continue;
+		auto var = dyn_cast<GlobalVariable>(cai->getOperand(1));
+		if (!var) continue;
+		auto fn = dyn_cast<Function>(cai->getOperand(0));
+		auto cstr = dyn_cast<ConstantDataArray>(var->getOperand(0))->getAsCString();
 
-				// Function annotations
-				if (auto fn = dyn_cast<Function>(e->getOperand(0)->getOperand(0))) {
-					if (anno == no_xMR_anno) {
-						if (verboseFlag) errs() << "Directive: do not clone function '" << fn->getName() << "'\n";
-						fnsToSkip.insert(fn);
-						if (fnsToClone.find(fn) != fnsToClone.end()) {
-							fnsToClone.erase(fn);
-						}
-					} else if (anno == xMR_anno) {
-						if (verboseFlag) errs() << "Directive: clone function '" << fn->getName() << "'\n";
-						fnsToClone.insert(fn);
-					} else if (anno == xMR_call_anno) {
-						if (verboseFlag) errs() << "Directive: replicate calls to function '" << fn->getName() << "'\n";
-						coarseGrainedUserFunctions.push_back(fn->getName().str());
-					} else if (anno == skip_call_anno) {
-						if (verboseFlag) errs() << "Directive: do not clone calls to function '"  << fn->getName() << "'\n";
-						skipLibCalls.push_back(fn->getName().str());
-						// TODO: do we need to worry about duplicates? - make it a set instead
-					} else if (anno.startswith("no-verify-")) {
-						StringRef global_name = anno.substr(10, anno.size() - 10);
+		// Function directives.
 
-						GlobalValue* glbl = M.getNamedValue(global_name);
-						if (glbl) {
-							GlobalVariable* glblVar = dyn_cast<GlobalVariable>(glbl);
-							if (glblVar) {
-								// make sure the set exists already
-								if (globalCrossMap.find(glblVar) == globalCrossMap.end()) {
-									std::set<Function*> tempSet;
-									globalCrossMap[glblVar] = tempSet;
-								}
-								globalCrossMap[glblVar].insert(fn);
-								if (verboseFlag) {
-									errs() << "Directive: ignoring global '" << global_name
-										   << "' being used in function '" << fn->getName() << "'\n";
-								}
-							}
-						} else {
-							errs() << warn_string << " global '" << global_name << "' doesn't exist\n";
-						}
+		if (cstr == xMR_anno) {
+			if (!fn) continue;
+			// Clone this function.
+			if (verboseFlag)
+				errs() << "Directive: clone function '" << fn->getName() << "'\n";
+			fnsToClone.insert(fn);
+			while (fnsToSkip.find(fn) != fnsToSkip.end())
+				fnsToSkip.erase(fn);
+		}
 
-					} else if (anno.startswith("no_xMR_arg-")) {
-						StringRef argNumStr = anno.substr(11, anno.size() - 11);
-						int argNum = std::stoi(argNumStr.str());
-						// argNumStr.getAsInteger(10, &argNum);
+		if (cstr == no_xMR_anno) {
+			if (!fn) continue;
+			// Don't clone this function.
+			if (verboseFlag)
+				errs() << "Directive: do not clone function '" << fn->getName() << "'\n";
+			fnsToSkip.insert(fn);
+			while (fnsToClone.find(fn) != fnsToClone.end())
+				fnsToClone.erase(fn);
+		}
 
-						if (argNum >= fn->getFunctionType()->params().size()) {
-							errs() << warn_string << " index '" << argNum
-								   << "' is greater than the number of operands in function '"
-								   << fn->getName() << "'\n";
-							// Don't exit
-							// std::exit(-1);
-						} else {
-							// create set if first one
-							if (noXmrArgList.find(fn) == noXmrArgList.end()) {
-								std::set<int> tempSet;
-								noXmrArgList[fn] = tempSet;
-							}
-							// add to set of function arguments indices to skip
-							noXmrArgList[fn].insert(argNum);
-							if (verboseFlag) {
-								errs() << "Directive: do not clone argument "
-									   << argNum << " in function '"
-									   << fn->getName() << "'\n";
-							}
-						}
+		if (cstr == xMR_call_anno) {
+			if (!fn) continue;
+			// Replicate calls to the function(s) associated with this annotation.
+			if (verboseFlag)
+				errs() << "Directive: replicate calls to function '" << fn->getName() << "'\n";
+			// TODO: Make sure the function isn't also in skipLibCalls?
+			coarseGrainedUserFunctions.push_back(fn->getName().str());
+		}
 
-					} else if (anno.startswith(cloneAfterCallAnno)) {
-						if (verboseFlag) errs() << "Directive: replicate function '" << fn->getName() << "' arguments after the call\n";
-						if (anno.size() == cloneAfterCallAnno.size()) {
-							// clone all the args
-							cloneAfterFnCall.insert(fn);
-							// also, don't touch the insides, or make more than one call
-							skipFn.push_back(fn->getName().str());
-							skipLibCalls.push_back(fn->getName().str());
-						} else {
-							// it's a list of indices to clone
-							StringRef argList = anno.substr(cloneAfterCallAnno.size(), anno.size() - cloneAfterCallAnno.size());
-							errs() << err_string << " this feature is not yet supported as a directive!\n";
-							errs() << anno << "\n";
-							exit(-1);
-						}
+		if (cstr == skip_call_anno) {
+			if (!fn) continue;
+			// Don't clone calls to the function(s) associated with this annotation.
+			if (verboseFlag)
+				errs() << "Directive: do not clone calls to function '"  << fn->getName() << "'\n";
+			// TODO: Make sure there are no duplicates in skipLibCalls?
+			// TODO: Make sure the function doesn't also appear in coarseGrainedUserFunctions?
+			skipLibCalls.push_back(fn->getName().str());
+		}
 
-					} else if (anno == isr_anno) {
-						if (verboseFlag) errs() << "Directive: function '" << fn->getName() << "' is an ISR\n";
-						isrFunctions.insert(fn);
-					} else if (anno == repl_ret_anno) {
-						if (verboseFlag) errs() << "Directive: clone function '" << fn->getName() << "' return value\n";
-						replReturn.insert(fn);
-					} else if (anno == prot_lib_anno) {
-						if (verboseFlag) errs() << "Directive: treat function '" << fn->getName() << "' as a protected library\n";
-						protectedLibList.insert(fn);
-						// it needs to be added to clone list as well
-						fnsToClone.insert(fn);
-					} else {
-						assert(false && "Invalid option on function");
-					}
+		if (cstr.startswith("no-verify-")) {
+			if (!fn) continue;
+			// Ignore this global variable. (TODO: what does this actually mean?)
+			StringRef global_name = cstr.substr(10, cstr.size() - 10);
+			GlobalValue* glbl = M.getNamedValue(global_name);
+			if (!glbl) continue;
+			GlobalVariable* glblVar = dyn_cast<GlobalVariable>(glbl);
+			if (!glblVar) continue;
 
+			// make sure the set exists already
+			if (globalCrossMap.find(glblVar) == globalCrossMap.end()) {
+				std::set<Function*> tempSet;
+				globalCrossMap[glblVar] = tempSet;
+			}
+			globalCrossMap[glblVar].insert(fn);
+			if (verboseFlag) {
+				errs() << "Directive: ignoring global '" << global_name
+				       << "' being used in function '" << fn->getName() << "'\n";
+			}
+		}
+
+		if (cstr.startswith("no_xMR_arg-")) {
+			if (!fn) continue;
+			StringRef argNumStr = cstr.substr(11, cstr.size() - 11);
+			int argNum = std::stoi(argNumStr.str());
+			// argNumStr.getAsInteger(10, &argNum);
+
+			if (argNum >= fn->getFunctionType()->params().size()) {
+				errs() << warn_string << " index '" << argNum
+				       << "' is greater than the number of operands in function '"
+				       << fn->getName() << "' (ignoring annotation)\n";
+			} else {
+				// create set if first one
+				if (noXmrArgList.find(fn) == noXmrArgList.end()) {
+					std::set<int> tempSet;
+					noXmrArgList[fn] = tempSet;
 				}
-				// Global annotations
-				else if (auto gv = dyn_cast<GlobalVariable>(e->getOperand(0)->getOperand(0))) {
-					if (anno == no_xMR_anno) {
-						if (verboseFlag) errs() << "Directive: do not clone global variable '" << gv->getName() << "'\n";
-						globalsToSkip.insert(gv);
-					} else if (anno == xMR_anno) {
-						if (verboseFlag) errs() << "Directive: clone global variable '" << gv->getName() << "'\n";
-						globalsToClone.insert(gv);
-					} else if (anno == default_xMR) {
-						if (verboseFlag) errs() << "Directive: set xMR as default\n";
-					} else if (anno == default_no_xMR) {
-						if (verboseFlag) errs() << "Directive: set no xMR as default\n";
-						xMR_default = false;
-					} else {
-						if (verboseFlag) errs() << "Directive: " << anno << "\n";
-						assert(false && "Invalid option on global value");
-					}
-				}
-				else {
-					assert(false && "Non-function annotation");
+				// add to set of function arguments indices to skip
+				noXmrArgList[fn].insert(argNum);
+				if (verboseFlag) {
+					errs() << "Directive: do not clone argument "
+					       << argNum << " in function '"
+					       << fn->getName() << "'\n";
 				}
 			}
+		}
+
+		if (cstr.startswith(cloneAfterCallAnno)) {
+			if (!fn) continue;
+			if (verboseFlag)
+				errs() << "Directive: replicate function '" << fn->getName() << "' arguments after the call\n";
+			if (cstr.size() == cloneAfterCallAnno.size()) {
+				// clone all the args
+				cloneAfterFnCall.insert(fn);
+				// also, don't touch the insides, or make more than one call
+				skipFn.push_back(fn->getName().str());
+				skipLibCalls.push_back(fn->getName().str());
+			} else {
+				// it's a list of indices to clone
+				StringRef argList = cstr.substr(cloneAfterCallAnno.size(), cstr.size() - cloneAfterCallAnno.size());
+				errs() << err_string << " this feature is not yet supported as a directive!\n";
+				errs() << cstr << "\n";
+				exit(-1);
+			}
+		}
+
+		if (cstr == isr_anno) {
+			if (!fn) continue;
+			// This function is an ISR.
+			if (verboseFlag)
+				errs() << "Directive: function '" << fn->getName() << "' is an ISR\n";
+			isrFunctions.insert(fn);
+		}
+
+		if (cstr == repl_ret_anno) {
+			if (!fn) continue;
+			// Clone this function's return values.
+			if (verboseFlag)
+				errs() << "Directive: clone function '" << fn->getName() << "' return value\n";
+			replReturn.insert(fn);
+		}
+
+		if (cstr == prot_lib_anno) {
+			if (!fn) continue;
+			// Treat the associated function(s) as protected libraries.
+			if (verboseFlag)
+				errs() << "Directive: treat function '" << fn->getName() << "' as a protected library\n";
+			protectedLibList.insert(fn);
+			// it needs to be added to clone list as well
+			fnsToClone.insert(fn);
+		}
+
+		// Global directives.
+		if (cstr == default_xMR) {
+			if (verboseFlag)
+				errs() << "Directive: set xMR as default\n";
+			xMR_default = true;
+		} else 	if (cstr == default_no_xMR) {
+			if (verboseFlag)
+				errs() << "Directive: set no xMR as default\n";
+			xMR_default = false;
 		} else {
-			errs() << warn_string << " global annotations of wrong type!\n" << *global_annos << "\n";
+			// There will be some
+			// annotations that we don't
+			// recognize. That's normal,
+			// since annotations are used
+			// for all sorts of things. We
+			// want to respond only to
+			// annotations that we know
+			// are ours.
 		}
 	}
+
 
 	/*
 	 * get the data from the list of "used" globals, and add it to volatileGlobals
@@ -737,7 +769,8 @@ void dataflowProtection::removeLocalAnnotations(Module& M) {
 
 	// Try again: Remove the global that defines the default behavior of COAST (if exists)
 	if (auto default_behavior = M.getNamedGlobal(default_global)) {
-		assert( (default_behavior->getNumUses() < 1) && "no more uses for global default");
+	  // TODO: What's the point of this assert?
+	  // assert( (default_behavior->getNumUses() < 1) && "no more uses for global default");
 		default_behavior->eraseFromParent();
 	}
 
